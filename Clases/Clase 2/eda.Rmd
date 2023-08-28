@@ -1,0 +1,939 @@
+---
+title: "Análisis exploratorio de datos"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      toc_collapsed: true
+    toc_depth: 3
+    number_sections: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=T)
+```
+
+Vamos a hacer _EDA_ (Exploratory Data Analysis) de datos municipios de Brasil de 2019 de tres fuentes:
+
+* [Pagos del plan Bolsa Familia del Portal de Transparencia](https://legado.dados.gov.br/dataset/bolsa-familia-pagamentos) 
+* El [Instituto Brasileño de Geografía y Estadística](https://legado.dados.gov.br/organization/about/instituto-brasileiro-de-geografia-e-estatistica-ibge) (IBGE)
+* El [Instituto de Investigación Económica Aplicada](https://legado.dados.gov.br/organization/about/ipea)
+
+Vamos a suponer que nuestro objetivo final es predecir el PIB a nivel municipio. Esto podría ser útil, por ejemplo, si sabemos que para algunos municipios este dato es poco confiable, mientras para otros no. También si es un dato que se publica con rezago con respecto a otros que están disponibles más rápido.
+
+**WARNING**: esto es solamente un escenario hipotético. Si de verdad quisiéramos hacer este ejercicio deberíamos analizar muchos aspectos, como:
+
+* ¿Cómo se estima el PIB? ¿Hay algún método más simple que me permita estimar el dato sin machine learning?
+* ¿La población de municipios sin dato confiable tiene una distribución similar en sus features a la población con dato confiable? En tal caso, ¿podemos suponer que el DGP (proceso generador de datos) es el mismo?
+* ¿Los features van a estar disponibles al momento de la predicción?
+* ¿Hay otros features importantes disponibles?
+* Etc.
+
+**WARNING 2**: en este análisis nuestro objetivo es explorar y entender los datos, formular hipótesis (por ejemplo, acerca de qué features pueden ser importantes), etc.. Esto quiere decir las transformaciones que hagamos acá no necesariamente vayan a ser las mismas que apliquemos cuando entrenemos un modelo.
+
+**WARNING 3**: el siguiente es **un** EDA de entre muchos posibles. ¡Seguramente no sea el mejor porque es para dar clase!
+
+
+```{r, message=F, warning=F}
+library(tidyverse)
+library(janitor)
+library(skimr)
+library(GGally)
+library(ggpubr)
+library(hexbin)
+library(glue)
+library(scales)
+# library(kableExtra) # dont load it because it breaks skimr
+
+# install.packages("remotes")
+# remotes::install_github("rpkgs/gg.layers")
+library(gg.layers)
+```
+
+
+Levantamos los tres datasets:
+
+```{r}
+file_bolsa = "data/working/bolsafamilia_municipios_2019.csv"
+file_ibge = "data/working/ibge_municipios_2019.csv"
+file_varios = "data/working/varios_municipios_2019.csv"
+```
+
+
+```{r}
+df_bolsa = read_csv(file_bolsa, show_col_types=F)
+df_ibge = read_csv(file_ibge, show_col_types=F)
+df_varios = read_csv(file_varios, show_col_types=F)
+```
+
+
+# Inspección inicial
+
+Inspeccionamos algunas características básicas de los data.frames:
+
+```{r}
+glimpse(df_bolsa)
+head(df_bolsa)
+```
+
+* `UF` (Unidad Federativa) indica el estado.
+* `num_beneficiarios_mean` es el número de beneficiarios promedio a lo largo del año.
+* `suma_valor` es la suma de los pagos totales en el año.
+
+```{r}
+glimpse(df_ibge)
+```
+
+```{r}
+glimpse(df_varios)
+```
+
+* `despesa_pessoal_encargos_sociais` indica gasto en personal y cargas sociales.
+* el nombre del municipio `municipio` ya está normalizado entre los datasets.
+
+
+# Chequeo de duplicados y joins
+
+Vamos a hacer un **join de los datasets** usando `municipio` como clave (ya sabemos que el campo está normalizado). Antes de hacerlo es conveniente revisar si hay observaciones duplicadas o si algún dataset tiene observaciones (municipios) faltantes.
+
+```{r}
+dups_bolsa = df_bolsa %>% get_dupes("municipio")
+dups_ibge = df_ibge %>% get_dupes("municipio")
+dups_varios = df_varios %>% get_dupes("municipio")
+```
+
+
+```{r}
+munis_bolsa = df_bolsa %>% pull(municipio) %>% unique()
+munis_ibge = df_ibge %>% pull(municipio) %>% unique()
+munis_varios = df_varios %>% pull(municipio) %>% unique()
+
+cat(
+  length(munis_bolsa),
+  length(munis_ibge),
+  length(munis_varios)
+)
+```
+
+¿Los de `df_bolsa` y `df_ibge` son los mismos?
+
+```{r}
+# intersect(munis_bolsa, munis_ibge)
+length(intersect(munis_bolsa, munis_ibge))
+```
+
+¿Cuáles de `df_varios` no están en `df_bolsa`/`df_ibge`?
+
+```{r}
+setdiff(munis_varios, munis_ibge)
+```
+¿Cuáles de `df_bolsa`/`df_ibge` no están en `df_varios`?
+
+```{r}
+setdiff(munis_ibge, munis_varios)
+```
+
+¿Cuáles están en todos los dfs?
+
+```{r}
+# aplica la funcion intersect recursivamente sobre la lista
+munis_en_comun = Reduce(
+  intersect, list(munis_bolsa, munis_ibge, munis_varios))
+length(munis_en_comun)
+# Reduce(fn, elementos)
+```
+
+---------------------------------------------------------------
+
+Hacemos el **join**. Es importante saber qué observaciones estamos conservando o eliminando en cada paso. 
+
+```{r}
+df = df_bolsa %>%
+  full_join(df_ibge, by="municipio") %>% # 5570 municipios 
+  left_join(df_varios, by="municipio") 
+  # excluimos los que estan en varios que no estan en los otros dos (27 municipios)
+```
+
+
+## Renombrar variables
+
+Renombramos algunas columnas por comodidad:
+
+```{r}
+df = df %>%
+  rename(
+    nome_regiao = nome_da_grande_regiao
+    ,nome_uf = nome_da_unidade_da_federacao
+    ,hierarquia = hierarquia_urbana_principais_categorias
+    ,tipologia = tipo_urbano
+  )
+```
+
+Para normalizar o limpiar los nombres de las columnas es muy útil la función `janitor::clean_names()` (en este caso ya la aplicamos cuando generamos los datasets).
+
+Esta librería también tiene otras funciones muy útiles, como `remove_empty()` para eliminar filas o columnas vacías o `remove_constant()` para eliminar filas o columnas constantes.
+
+Vamos a eliminar el sufijo del año en los nombres de las columnas porque sabemos que todos los datos son del mismo año:
+
+```{r}
+df = df %>% rename_all(function(x) str_remove(x, "_2019"))
+```
+
+
+## Un vistazo
+
+La librería `skimr` nos da un vistazo general de los datos.
+
+```{r}
+skim(df)
+```
+
+```{r}
+skim_eda = partition(skim(df))
+names(skim_eda)
+```
+
+Pueden revisar [la vignette de `skimr`](https://cran.r-project.org/web/packages/skimr/vignettes/skimr.html) para conocer más opciones.
+
+
+# Análisis de datos faltantes
+
+Calculamos el % de datos faltantes por variable:
+
+```{r}
+map_dbl(df, function(x) mean(is.na(x)) * 100) %>% 
+  sort(decreasing=T) %>% 
+  as.data.frame()
+```
+
+y por municipio:
+
+```{r}
+na_by_row = df %>% apply(1, function(x) mean(is.na(x)) * 100)
+names(na_by_row) = df$municipio
+na_by_row %>% sort(decreasing=T) %>% head(10)
+mean(na_by_row > 0)
+```
+
+También podemos recurrir a `skimr`:
+
+```{r}
+skim_eda$numeric %>% 
+  select(skim_variable, n_missing) %>% 
+  filter(n_missing > 0)
+```
+
+```{r}
+skim_eda$character %>% 
+  select(skim_variable, n_missing) %>% 
+  filter(n_missing > 0)
+```
+
+En un caso real hay que ser muy cuidadoso con los datos faltantes. El tratamiento que les demos depende del tipo de modelo predictivo que usemos: en algunos casos vamos a necesitar imputarlos mientras que ciertas metodologías admiten NAs.
+
+Durante el EDA tomaremos las decisiones que más nos sirvan para entender los datos y comunicar los resultados. Para esto es fundamental preguntarse por la interpretación de los _missing_ variable por variable. 
+
+En este ejemplo vamos a suponer que los NA en las variables monetarias indican que el monto es igual a 0. 
+
+```{r}
+vars_monetarias = c(
+  "despesa_ciencia_tecnologia", "despesa_educacao_cultura", 
+  "despesa_pessoal_encargos_sociais", "despesa_transporte",
+  "exportacoes", "importacoes", "pib", "pib_percapita", 
+  "suma_valor", "vab_agro", "vab_industria"
+)
+df = df %>% 
+  mutate_at(vars_monetarias, function(x) ifelse(is.na(x), 0, x))
+```
+
+Además vemos que los datos de población con NA se pueden reconstruir con el PIB y el PIB per cápita.
+
+```{r}
+df = df %>% 
+  mutate(
+    populacao = ifelse(
+      is.na(populacao), pib / pib_percapita * 1000, populacao)
+    ,populacao = round(populacao, 0)
+  )
+```
+
+
+# Creación de variables
+
+Para explorar los datos puede ser útil crear nuevas columnas o transformar las que tenemos.
+
+```{r}
+df = df %>%
+  mutate(
+    densidad = populacao / area_geografica
+    ,suma_perbenef = suma_valor / num_beneficiarios_mean
+  ) 
+```
+
+
+```{r}
+df = df %>% 
+    mutate_at(
+    vars(
+      vab_agro, vab_industria, despesa_ciencia_tecnologia
+      ,despesa_pessoal_encargos_sociais, despesa_educacao_cultura
+      ,despesa_transporte, exportacoes, importacoes
+      ,num_beneficiarios_mean, suma_valor
+    ), list(pc=function(x) x / .$populacao)
+  )
+```
+
+
+```{r}
+# recodificar variables
+df = df %>% 
+  mutate_at(vars(codigo_municipio, codigo_uf), as.character)
+```
+
+```{r}
+# categorías nuevas en función de valores de otras variables
+df = df %>% 
+  mutate(
+    semiarido = ifelse(semiarido == "Sim", T, F),
+    regiao = case_when(
+      nome_regiao == "Norte" ~ "N"
+      ,nome_regiao == "Nordeste" ~ "NE"
+      ,nome_regiao == "Centro-oeste" ~ "CO"
+      ,nome_regiao == "Sudeste" ~ "SE"
+      ,nome_regiao == "Sul" ~ "S"
+      ,TRUE ~ "error"
+    )
+  )
+```
+
+
+Podemos usar `forcats::fct_lump()` para agrupar categorías poco frecuentes.
+
+```{r}
+df$atividade_maior_vab %>% unique()
+df %>% 
+  mutate(
+    atividade = forcats::fct_lump(
+      atividade_maior_vab, prop=0.1, other_level="Otros")
+  ) %>% 
+  pull(atividade) %>% 
+  unique()
+```
+
+----------------------------------------------------------------
+
+**A veces** es útil separar el dataset según el tipo de variables una vez que terminamos el preprocesamiento.
+
+```{r}
+df_num = df %>% select_if(is.numeric)
+df_cat = df %>% select_if(function(x) !is.numeric(x))
+```
+
+
+
+# Análisis de variables numéricas
+
+Usamos **histogramas** y **densidades** para visualizar la distribución.
+
+```{r}
+ggplot(df, aes(x=pib_percapita)) +
+  geom_histogram(alpha=0.5) +
+  NULL
+```
+
+```{r}
+ggplot(df, aes(x=log10(pib_percapita))) +
+  geom_histogram(alpha=0.5) +
+  NULL
+```
+
+La escala logarítmica es una escala no lineal en la que moverse una unidad implica multiplicarse por las base del logaritmo (2, 10 o _e_, por ejemplo). $\text{log}_{10}$ mide, por ejemplo, órdenes de magnitud ($x$ difiere en un orden de magnitud de $y$ si $x$ es aproximadamente 10 veces mayor que $y$). 
+
+Entonces, la transformación logarítmica es útil cuando la variabilidad relevante está en el orden de magnitud, no en la escala original. Esto es común en el caso de variables monetarias, cuando las variaciones relevantes son porcentuales y no nominales. 
+
+Otra manera de visualizar lo mismo:
+
+```{r}
+ggplot(df, aes(x=pib_percapita)) +
+  geom_histogram(alpha=0.5) +
+  scale_x_log10(
+    breaks = trans_breaks("log10", function(x) 10^x),
+    labels=trans_format("log10", math_format(10^.x))
+  ) +
+  NULL
+```
+
+Podemos comparar la distribución de una variable entre grupos.
+
+```{r}
+ggplot(df, aes(x=log(pib_percapita), fill=semiarido)) +
+  geom_histogram(alpha=0.5) +
+  NULL
+```
+
+```{r}
+# cuando usamos density normalizamos la distribucion en cada grupo
+ggplot(df, aes(x=log(pib_percapita), fill=semiarido)) +
+  geom_density(alpha=0.5, adjust=2) +
+  NULL
+# adjust determina el nivel de suavidad
+# adjust=2 --> bandas de 2 veces el ancho default
+```
+
+Con la librería `ggridges` podemos hacer algunos gráficos lindos:
+
+```{r}
+ggplot(df, aes(x=log(pib_percapita), y=tipologia, fill =..x..)) +
+  ggridges::geom_density_ridges_gradient(scale=1) +
+  scale_fill_viridis_c() +
+  NULL
+```
+
+```{r}
+ggplot(df, aes(x=log(pib_percapita), y=tipologia, fill=tipologia)) +
+  ggridges::stat_density_ridges(
+    quantile_lines=T, quantiles=c(.25,.5,.75), alpha=0.7) +
+  NULL
+```
+
+```{r}
+# a veces es útil visualizar la cantidad de obs al mismo tiempo!
+ggplot(df, aes(x=log(pib_percapita), y=tipologia, fill=tipologia)) +
+  ggridges::geom_density_ridges(jittered_points=T, point_size=0.5) +
+  NULL
+```
+
+
+También podemos usar **boxplots**:
+
+![Fuente: https://r4ds.had.co.nz/](img/boxplot_r4ds.png)
+
+```{r}
+ggplot(df, aes(
+  x=fct_reorder(nome_regiao, pib_percapita, .fun="median"), 
+  y=pib_percapita, fill=nome_regiao)) +
+  geom_boxplot() + 
+  scale_y_continuous(trans='log10') +
+  # facet_wrap(~ tipologia) +
+  theme_minimal() +
+  NULL
+```
+
+```{r}
+# eliminando los outliers, invirtiendo las coordenadas, y mostrando los puntos:
+ggplot(df, aes(
+  x=fct_reorder(hierarquia, pib_percapita, .fun="median"), 
+  y=pib_percapita, fill=hierarquia)
+) +
+  geom_jitter(aes(color=hierarquia), alpha=0.2, size=0.5) +
+  gg.layers::geom_boxplot2(alpha=0.5) + 
+  scale_y_continuous(trans='log10') +
+  # facet_wrap(vars(nome_regiao)) +
+  coord_flip() +
+  theme_minimal() +
+  theme(legend.position="none") +
+  NULL
+```
+
+
+Podemos calcular estadísticos globales o por grupo:
+
+```{r}
+quantile(df_num$pib_percapita, seq(0,1,0.1))
+```
+
+```{r}
+# para todas las variables:
+list_cuantiles = df_num %>% 
+  map(function(x) quantile(x, seq(0, 1, 0.25), na.rm=T) )
+```
+
+```{r}
+list_cuantiles %>% 
+  as.data.frame() %>% 
+  select(num_beneficiarios_mean, suma_valor, pib)
+```
+
+¡También podemos revisar los resultados de `skimr`!
+
+```{r}
+# por grupo:
+df %>% 
+  group_by(nome_regiao) %>% 
+  summarise(
+    n = n(),
+     expo_pc = mean(exportacoes_pc, na.rm=T)
+    ,expo_pc2 = weighted.mean(
+      exportacoes_pc, w=populacao, na.rm=T)
+    ,popM = sum(populacao, na.rm=T) / 1e6
+    ,area = sum(area_geografica, na.rm=T)
+  ) 
+
+# Cuales son las expo. per capita de cada region?
+```
+
+
+## Relaciones entre variables
+
+En general usamos **diagramas de dispersión** (scatter plots):
+
+```{r}
+ggplot(df, aes(x=suma_perbenef, y=pib_percapita)) +
+  geom_point() +
+  NULL
+```
+
+```{r}
+ggplot(df, aes(x=log10(suma_perbenef), y=log10(pib_percapita))) +
+  geom_point(alpha=0.3, size=0.5) +
+  geom_smooth() + # smoother / suavizado
+  NULL
+```
+
+```{r}
+ggplot(df, 
+       aes(x=log(suma_valor_pc), y=log(pib_percapita), 
+           color=semiarido)) +
+  geom_point(size=0.5, alpha=0.5) +
+  geom_smooth() + # smoother / suavizado
+  NULL
+```
+
+Una relación lineal en un gráfico log-log implica elasticidad constante: la pendiente de un ajuste lineal indica aproximadamente cuánto crece en promedio porcentualmente una variable cuando la otra crece 1%.
+
+```{r}
+# a veces es mejor un plot por grupo:
+ggplot(df, aes(x=num_beneficiarios_mean_pc, y=log10(pib_percapita))) +
+  geom_point(size=.7, alpha=0.3) +
+  geom_smooth(se=F, method="loess", size=.8) +
+  facet_wrap(vars(nome_regiao), scales="free_y") +
+  theme_light() +
+  NULL
+```
+
+Cuando **N es grande**, podemos usar alguna de las siguientes opciones:
+
+```{r}
+# partir en cuadrados:
+ggplot(df) +
+  geom_bin2d(aes(log10(suma_valor_pc), log10(pib_percapita))) +
+  scale_fill_viridis_c()
+
+# partir en hexagonos:
+# install.packages("hexbin")
+ggplot(df) +
+  geom_hex(aes(log10(suma_valor_pc), log10(pib_percapita))) +
+  scale_fill_viridis_c()
+
+# usar boxplots:
+ggplot(df, aes(log10(suma_valor_pc), log10(pib_percapita))) +
+  geom_boxplot(aes(group=cut_number(log10(suma_valor_pc), 10)))
+  # todos los grupos tienen igual N
+
+# despegar puntitos pegados (con cuidado, p/variables discretas):
+# ggplot(df) + 
+  # geom_jitter(aes(log10(suma_valor_pc), log10(pib_percapita)))
+```
+
+### Correlaciones
+
+Con un correlograma visualizamos la **correlación** entre todas las variables cuantitativas:
+
+```{r}
+GGally::ggcorr(
+  df_num, method=c("pairwise","spearman"),  
+  label=T, hjust=1, label_size=2, layout.exp=10, size=3)
+```
+
+Las correlaciones de a pares pueden ser útiles para **detectar variables redundantes**:
+
+```{r}
+cor_matrix = cor(df_num, method="spearman", use="pairwise")
+cor_matrix[upper.tri(cor_matrix, diag=T)] = NA
+df_cor = cor_matrix %>% as.table() %>% as.data.frame()
+df_cor %>% 
+  rename(corr = Freq) %>% 
+  filter(!is.na(corr) & Var1 != Var2) %>% 
+  arrange(-abs(corr)) %>% 
+  head(10) %>% 
+  knitr::kable() %>%
+  kableExtra::kable_styling()
+
+```
+
+
+>Métodos de manejo de NA en `cor()`:
+>
+* `"everything"`: usa _todas_ las observaciones (si hay NA en un par de variables, arroja NA)
+* `"pairwise"`: usa las observaciones completas de a pares (descarta las observaciones con algún NA de a pares)
+* `"complete.obs"`: usa las observaciones completas del data.frame (descarta las observaciones con algún NA considerando todas las filas)
+
+
+En la clase que viene vamos a ver cómo medir asociaciones entre distintos tipos de variables, y cómo esto nos puede ayudar para guiar el EDA.
+
+
+# Análisis de variables categóricas
+
+Revisamos la **distribución de frecuencias** de las variables categóricas.
+
+```{r}
+table(df_cat$tipologia)
+table(df_cat$tipologia, df_cat$semiarido)
+```
+
+```{r}
+# para todas las variables:
+tabs = df_cat %>% map(function(x) table(x, useNA="ifany"))
+tabs$hierarquia
+tabs$tipologia
+```
+
+Podemos hacer tablas más informativas con `janitor::tabyl()`.
+
+```{r}
+df_cat %>% 
+  tabyl(tipologia, semiarido) %>% 
+  adorn_totals() %>% 
+  adorn_percentages("row") %>% 
+  adorn_pct_formatting() %>% 
+  adorn_ns()
+```
+
+Cortamos el target numérico en bins y hacemos tablas de frecuencias:
+
+```{r}
+tablas_vs_target = function(target, df_cat, variable, g=5) {
+  df_cat$target_ = Hmisc::cut2(target, g=g)
+  tab = df_cat %>% 
+    tabyl(target_, !!sym(variable)) %>% 
+    adorn_totals() %>% 
+    adorn_percentages("col") %>% 
+    adorn_pct_formatting() %>% 
+    adorn_ns()
+  return(tab)
+}
+
+tablas = list()
+for (col in names(df_cat)) {
+  tablas[[col]] = tablas_vs_target(
+    df$pib_percapita, df_cat, col)
+}
+```
+
+```{r}
+tablas$hierarquia
+tablas$semiarido
+```
+
+Podemos hacer tablas más lindas con `knitr::kable()` y `kableExtra::kable_styling()`.
+
+```{r}
+tablas$hierarquia %>% 
+  knitr::kable() %>% 
+  kableExtra::kable_styling(
+    bootstrap_options=c("striped", "hover"), font_size=12
+  )
+```
+
+Y aún más lindas con [`gt`](https://gt.rstudio.com/articles/intro-creating-gt-tables.html) o [`gtsummary`](https://www.danieldsjoberg.com/gtsummary/articles/tbl_summary.html) :)
+
+
+## Visualizaciones
+
+En general usamos **gráficos de barras**:
+
+```{r}
+ggplot(df) +
+  geom_bar(aes(x=nome_regiao)) +
+  NULL
+```
+
+Vamos a mejorarlo un poco:
+
+
+```{r}
+# ordenando por N
+ggplot(df) +
+  geom_bar(aes(x=fct_infreq(nome_regiao))) +
+  NULL
+```
+
+Agregando labels:
+
+```{r}
+# La version mas general: DF agrupado + geom_col()
+# (en lugar de geom_bar())
+df_tmp = df %>%
+  group_by(nome_regiao) %>% 
+  summarise(
+    n = n()
+  ) %>% 
+  mutate(
+    porcentaje = n / sum(n) * 100,
+    nome_regiao = fct_reorder(nome_regiao, n)
+    )
+ggplot(df_tmp) +
+  geom_col(aes(x=nome_regiao, y=porcentaje), alpha=0.5) +
+  geom_text(aes(
+    x=nome_regiao, y=porcentaje, label=glue("{n}\n({round(porcentaje,2)}%)")), 
+            color="black", size=3) +
+  theme_light() +
+  labs(x="Region", y="N") +
+  NULL
+
+```
+
+Nota: a veces con una buena tabla alcanza!
+
+Podemos analizar la relación con alguna variable numérica usando alguna medida resumen como la media:
+
+```{r}
+ggplot(df) +
+  geom_bar(aes(x=nome_regiao, y=pib_percapita), 
+           fun="mean", stat="summary", alpha=.5) + 
+  theme_minimal() + 
+  NULL
+```
+
+Los puntos suelen usarse para representar valores donde no es necesario incluir el 0.
+
+```{r}
+ggplot(df, aes(x=nome_regiao, y=pib_percapita)) +
+  geom_point(fun="mean", stat="summary") +
+  # stat_summary(fun = "mean", geom = "point") +
+  geom_line(aes(group=1), fun="mean", stat="summary") +
+  theme_minimal() + 
+  NULL
+```
+
+Ordenando los niveles según los valores de otra variable:
+
+```{r}
+# resumir los datos y luego usar geom_col():
+df_tmp = df %>% 
+  group_by(nome_uf) %>% 
+  summarise_at(vars(populacao), sum)
+ggplot(df_tmp) +
+  geom_col(
+    aes(x=populacao, y=fct_reorder(as.factor(nome_uf), populacao)), 
+    alpha=0.5) +
+  labs(y=NULL) +
+  scale_x_continuous(labels=scales::comma) +
+  theme_light() +
+  NULL
+
+# # La otra manera:
+# ggplot(df) +
+#   geom_bar(
+#     aes(x=populacao, y=fct_reorder(as.factor(nome_uf), populacao, .fun=sum)), 
+#     fun="sum", stat="summary", alpha=0.5) +
+#   labs(y=NULL) +
+#   scale_x_continuous(labels = scales::comma) +
+#   theme_classic() +
+#   NULL
+
+```
+
+También podemos hacer un boxplot por grupo, como vimos antes.
+
+#### Para pensar
+
+Vamos a suponer momentáneamente que nuestro target es binario: PIB bajo (0) o PIB alto (1). ¿Qué tablas y visualizaciones nos pueden servir como EDA en este escenario?
+
+```{r}
+df = df %>% 
+  mutate(target_pib = ifelse(pib_percapita > mean(pib_percapita), 1, 0)) 
+```
+
+```{r}
+# TODO
+```
+
+
+# Conclusiones
+
+* El EDA suele ser un proceso iterativo (explorar → transformar → explorar) que fácilmente se puede volver caótico. Por eso es importante:
+  * Tener un **plan** más o menos claro de los pasos que vamos a hacer, definiendo a qué **información indispensable** queremos llegar
+  * **Anotar** durante el proceso los nuevos análisis e hipótesis que se desprenden
+  * **Documentar** todo en la notebook/rmarkdown/script
+  * **Seleccionar** los cuadros y gráficos relevantes para comunicar los resultados, y contar lo importante del proceso
+
+* Algunos aspectos importantes a tener en cuenta antes/durante el EDA:
+  * Conocer la **fuente de los datos** y posibilidad de actualizarlos/replicarlos en el futuro
+  * Saber la **definición de las variables**
+  * Revisar registros **duplicados** / información innecesaria
+  * Ser conscientes de **qué observaciones eliminamos/conservamos** en cada paso
+  * En general es aconsejable primero "limpiar los datos" (filtrar observaciones/variables, analizar/imputar valores faltantes, consolidar tablas, etc.) antes de crear **nuevos features**
+  * Conocer la **distribución de las variables** categóricas/numéricas con estadísticos, tablas y visualizaciones, usando la escala apropiada 
+  * Conocer **cómo se relacionan las variables** entre sí, usando métricas y visualizaciones apropiadas
+  * Poner especial atención en la **distribución del target y su relación con el resto de las variables**
+  * ¿Lo que observamos es razonable? ¿Hay cosas inesperadas? ¿Hay **variables redundantes**?
+* El objetivo del EDA es entender los datos. Por lo tanto, los pasos de un EDA no necesariamente vayan a ser los mismos que apliquemos cuando entrenemos un modelo supervisado.
+
+
+# Referencias
+
+* [R for Data Science](https://r4ds.had.co.nz/)
+* [R Markdown: The Definitive Guide](https://bookdown.org/yihui/rmarkdown/)
+* [RMarkdown for Scientists](https://rmd4sci.njtierney.com/)
+* [Python Data Science Handbook](https://jakevdp.github.io/PythonDataScienceHandbook/)
+* [Hands-on Exploratory Data Analysis With Python](https://github.com/PacktPublishing/Hands-on-Exploratory-Data-Analysis-with-Python)
+* Librerías para Python:
+  * [ydata-profiling](https://github.com/ydataai/ydata-profiling)
+  * [sweetviz](https://github.com/fbdesignpro/sweetviz)
+
+
+# Bonus tracks
+
+Con `plotly::ggplotly()` podemos hacer interactivo cualquier gráfico de ggplot2.
+
+```{r}
+g = ggplot(
+  df
+  ,aes(x=log(pib_percapita+1), y=log(exportacoes+1)
+       ,color=semiarido, label=municipio, label2=nome_regiao)) +
+  geom_point(alpha=0.8, size=0.8) +
+  theme_minimal() + 
+  NULL
+plotly::ggplotly(g)
+```
+
+
+Con `GGally::ggpairs()` podemos analizar relaciones entre variables de múltiples tipos.
+
+```{r, warning=F}
+df_reduced = df %>%
+  select(
+    nome_regiao, suma_perbenef, densidad,
+    despesa_ciencia_tecnologia_pc, pib_percapita, semiarido
+  ) %>% 
+  mutate_if(is.numeric, function(x) log10(x+1))
+GGally::ggpairs(
+  df_reduced, 
+  columns = c("suma_perbenef", "densidad",
+            "despesa_ciencia_tecnologia_pc", "pib_percapita"),
+  mapping = aes(color=semiarido),
+  lower = list(continuous = GGally::wrap("points", alpha=0.3, size=0.1))
+)
+```
+
+
+¿Cómo generamos todos los gráficos bivariados con respecto a la variable target?
+
+```{r}
+# generamos log de todas las vars
+df_num_expanded = df_num %>%
+  mutate_all(list("log" = function(x) ifelse(x==0, 0, sign(x)*log10(abs(x))) ))
+```
+
+```{r}
+# Medimos corr en logs vs el target (equivale a spearman!)
+corr_mat = cor(
+  df_num_expanded %>% select(ends_with("_log")) %>% select(-pib_percapita_log),
+  df_num_expanded %>% select(pib_percapita_log),
+  method="pearson", use="pairwise")
+df_corr = corr_mat %>% as.data.frame()
+names(df_corr) = "correlation"
+df_corr = df_corr %>% 
+  arrange(-abs(correlation)) %>% 
+  rownames_to_column("variable")
+```
+
+
+```{r}
+# plot function
+plt_corr = function(df, variable) {
+  p = ggplot(df, aes(x=!!sym(variable), y=pib_percapita_log)) +
+    geom_jitter(size=.3, alpha=.2) +
+    geom_smooth(se=T, method="loess", size=.8, formula=y~x) +
+    labs(title=variable) +
+    theme_minimal() +
+    NULL
+  return(p)
+}
+```
+
+
+```{r}
+# lista de plots
+variables = df_corr$variable
+list_plots = map(variables, function(x) plt_corr(df_num_expanded, x))
+```
+
+
+```{r, warning=F}
+# save plots
+ggsave("output/bivariado_pib.pdf",width=6, height=6,
+       gridExtra::marrangeGrob(grobs=list_plots, nrow=2, ncol=1))
+```
+
+## Mapas
+
+Descargamos los shapefiles de [IBGE](https://geoftp.ibge.gov.br/organizacao_do_territorio/malhas_territoriais/malhas_municipais/municipio_2019/Brasil/BR/). 
+
+Shapefile es un formato de archivo con información geográfica. Indican el sistemas de coordenadas de referencia y proyección cartográfica usados. Contiene puntos (posiciones), líneas (recorridos) y polígonos (superficies) de alguna parte del mundo.
+
+Los podemos leer con `sf::read_sf()` y hacer un _join_ con nuestros datos.
+
+```{r}
+sf_mun = sf::read_sf(
+  "data/raw/ibge/br_municipios_20200807/BR_Municipios_2019.shp")
+sf_uf = sf::read_sf(
+  "data/raw/ibge/br_unidades_da_federacao/BR_UF_2019.shp")
+```
+
+```{r}
+names(sf_mun)
+dim(sf_mun)
+```
+
+
+```{r}
+sf_mun = sf_mun %>%
+  left_join(df, by=c("CD_MUN"="codigo_municipio"))
+```
+
+```{r}
+# municipios faltantes en nuestros datos
+sf_mun %>% 
+  filter(is.na(municipio)) %>% 
+  select(CD_MUN, NM_MUN, SIGLA_UF, AREA_KM2)
+```
+
+Creamos mapas coropléticos con `geom_sf()`. En estos mapas las áreas se sombrean de distintos colores según alguna característica.
+
+```{r}
+sf_mun_tmp = sf_mun %>% filter(nome_uf == "Sergipe")
+sf_uf_tmp = sf_uf %>% filter(NM_UF == "Sergipe")
+
+ggplot() +
+  geom_sf(data=sf_mun_tmp, aes(fill=pib_percapita), color="black", size=0.5) +
+  geom_sf(data=sf_uf_tmp, fill=NA, color="black", size=0.8) +
+  scale_fill_viridis_c(trans="log10", na.value="gray60") +
+  # coord_sf(xlim=c(-75,-55), ylim=c(-10, 3)) +
+  labs(fill="PIB per capita") +
+  NULL
+```
+
+```{r}
+g = ggplot() +
+  geom_sf(data=sf_mun, aes(fill=pib_percapita), color=NA) +
+  geom_sf(data=sf_uf, fill=NA, color="black", size=0.5) +
+  scale_fill_viridis_c(trans="log10", na.value="gray60") +
+  theme_minimal() +
+  guides(scale ="none") +
+  theme(legend.position=c(0.15,0.2)) +
+  labs(fill="PIB per capita") +
+  NULL
+
+ggsave("output/mapa_pibpercapita.png", g, width=10, height=8)
+```
+
+Si tuviéramos lat y long en nuestros datos podríamos inferir el mapa de esta manera:
+
+```
+df_geo = df %>% 
+  st_as_sf(coords=c("longitud", "latitud"), crs=4326)
+
+ggplot() + geom_sf(df_geo)
+```
