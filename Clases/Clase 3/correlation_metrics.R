@@ -88,4 +88,3 @@ ggplot(df) +
   NULL
 # x: edad, y: ingreso, color: sector_actividad
 cor(df$x, df$y, method="spearman")
-
