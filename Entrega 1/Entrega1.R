@@ -49,4 +49,22 @@ p <- ggplot(datosFiltrados, aes(x = tempo, y = loudness, color = explicit)) +
 
 print(p)
 
+datos_resumen <- datosFiltrados %>%
+  group_by(track_genre) %>%
+  summarise(mean_energy = mean(energy),
+            prop_explicit = mean(explicit))
 
+# Crea un gráfico de barras
+grafico_barras <- ggplot(datos_resumen, aes(x = track_genre, y = mean_energy, fill = prop_explicit)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Género de la pista", y = "Media de Energy", title = "Bar Chart de Media de Energy y Proporción de Explícitas por Género") +
+  scale_fill_gradient(low = "red", high = "blue") +  # Gradiente de colores según la proporción de explicit
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotar etiquetas en el eje x para mejor legibilidad
+
+# Muestra el gráfico
+print(grafico_barras)
+
+variables_numericas <- datosFiltrados[, c("energy", "loudness", "tempo", "speechiness")]
+
+# Crea la matriz de gráficos de dispersión
+pairs(variables_numericas)
