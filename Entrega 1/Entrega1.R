@@ -1,6 +1,16 @@
 library(tidyverse)
 library(ggplot2)
 library(corrplot)
+library(scales)
+library(glue)
+library(GGally)
+library(ggridges)
+library(plotly)
+library(factoextra)
+library(amap)
+library(sf)
+library(igraph)
+library(heatmaply)
 
 datos <- read.csv("~/Universidad/Datasets/Predictiva/dataset.csv")
 
@@ -123,7 +133,120 @@ ggplot(datos_combinados, aes(x = track_genre, na.rm=TRUE, y = explicit_numeric, 
         axis.text.y = element_text(hjust= 1, face = "bold"))
 
 #Pairs para ver la correlación entre variables
-pairs(datosNumericos, pch = 16)
+#pairs(datosNumericos, pch = 16)
 
+
+
+
+# Clustering
+
+# Pre-Procesamiento
+# funciones (udf) para normalizar
+minmax = function(x) (x - min(x)) / (max(x) - min(x))
+rob_scale = function(x) (x - median(x)) / IQR(x)
+id_cols = c("X","track_id","artists","album_name","track_name", 'mode', "key","time_signature",
+            'explicit', 'track_genre', 'duration_ms')
+colnames(datosFiltrados)
+
+# data numerica normalizada
+dat_c = datosFiltrados %>% 
+  select_if(is.numeric) %>% 
+  select("popularity","duration_ms","danceability","energy","loudness","speechiness","acousticness",   
+         "instrumentalness","liveness","valence","tempo") %>%
+  # scale(center=T, scale=T) %>% # estandarizacion media-desvio
+  mutate_all(rob_scale) %>% # normalizacion
+  as.data.frame() # las funciones de cluster se llevan mejor con data.frame (admite row.names)
+
+# Analisis exploratorio
+# formato long con datos normalizados
+colnames(datosFiltrados)
+gdat = datosFiltrados %>%
+  mutate_if(is.numeric, rob_scale) %>% 
+  pivot_longer(
+    cols = -all_of(id_cols), # Selecciona todas las columnas numéricas excepto las de id_cols
+    names_to = "variable",
+    values_to = "value"
+  )
+
+# plot de coordenadas paralelas
+plt = ggplot(gdat, aes(x = variable, y = value, group = track_genre)) +
+  geom_line(alpha = 0.3) +
+  geom_line(data = filter(gdat, track_genre == "hip-hop"), color = "green3", alpha = 0.7) +
+  theme_minimal()
+
+# plot interactivo
+ggplotly(plt, width=860, height=500)
+
+# matriz de distancias
+dist_obj = dist(dat_c, method="manhattan")
+dist_matrix = as.matrix(dist_obj)
+# nombres de filas y columnas
+dimnames(dist_matrix) = list(genero1=datosFiltrados$track_genre, genero2=datosFiltrados$track_genre)
+# de matriz a data.frame long con un atajo
+dist_df = as.data.frame(as.table(dist_matrix)) %>%
+  rename(dist = Freq) 
+
+# distancia mediana de cada genero vs el resto
+gdat = dist_df %>% 
+  group_by(genero1) %>%
+  summarise(median_dist = median(dist))
+# plot de las medianas ordenadas
+plt = 
+  ggplot(gdat, aes(x=reorder(genero1, median_dist), y=median_dist)) +
+  geom_point() +
+  theme_minimal() +
+  theme(axis.text.x=element_blank())
+
+ggplotly(plt, width=860, height=450) 
+
+# Clustering Jerarquico
+# Calcular unique(datosFiltrados$track_genre) y hc$order una vez
+hc = amap::hcluster(dat_c, method="manhattan", link="average")
+unique_track_genre <- unique(datosFiltrados$track_genre)
+order_hc <- hc$order
+
+# Crear un nuevo dataframe con las columnas genero1 y genero2 modificadas
+# Asegurarse de que los niveles sean únicos
+unique_track_genre_order <- unique(datosFiltrados$track_genre[hc$order])
+
+# Crear los factores con niveles únicos
+gdat = dist_df %>% 
+  mutate(
+    genero1 = factor(genero1, levels = unique_track_genre_order),
+    genero2 = factor(genero2, levels = unique_track_genre_order)
+  )
+
+dist_df <- as.data.frame(dist_matrix)
+colnames(dist_matrix) <- dist_df$genero2
+
+
+# Punto de quiebre
+fviz_nbclust(dat_c, FUNcluster=hcut, method="wss", k.max=10
+             ,diss=dist(dat_c, method="manhattan"), hc_method="average") 
+
+# Silhouette
+fviz_nbclust(dat_c, FUNcluster=hcut, method="silhouette", k.max=10
+             ,diss=dist(dat_c, method="manhattan"), hc_method="average") 
+
+# La cantidad optima de clusters es 8
+fviz_dend(hc, horiz=T, k=8, repel=T) 
+
+fviz_dend(hc, type="phylogenic", k=8, repel=T) 
+
+# Densidades por cluster
+# Data con variables originales
+dat_hc = datosFiltrados %>%
+  mutate(cluster = factor(hc$cluster))
+
+# indicamos "outliers"
+outlier_countries = dat_hc %>% 
+  group_by(cluster) %>% 
+  filter(n() == 1) %>% 
+  pull(track_genre)
+
+# variables normalizadas
+dat_c_hc = dat_c %>%
+  bind_cols(dat %>% select(all_of(id_cols))) %>% 
+  mutate(cluster = factor(hc$cluster))
 
 
