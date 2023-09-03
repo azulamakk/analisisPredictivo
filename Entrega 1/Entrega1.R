@@ -231,14 +231,14 @@ dat_c = datosFiltrados %>%
   select("popularity","duration_ms","danceability","energy","loudness","speechiness","acousticness",   
          "instrumentalness","liveness","valence","tempo", 'duration_ms') %>%
   # scale(center=T, scale=T) %>% # estandarizacion media-desvio
-  mutate_all(rob_scale) %>% # normalizacion
+  mutate_all(minmax) %>% # normalizacion
   as.data.frame() # las funciones de cluster se llevan mejor con data.frame (admite row.names)
 
 # Analisis exploratorio
 # formato long con datos normalizados
 colnames(datosFiltrados)
 gdat = datosFiltrados %>%
-  mutate_if(is.numeric, rob_scale) %>% 
+  mutate_if(is.numeric, minmax) %>% 
   pivot_longer(
     cols = -all_of(id_cols), # Selecciona todas las columnas numéricas excepto las de id_cols
     names_to = "variable",
@@ -284,11 +284,11 @@ order_hc <- hc$order
 
 # Punto de quiebre
 fviz_nbclust(dat_c, FUNcluster=hcut, method="wss", k.max=10
-             ,diss=dist(dat_c, method="manhattan"), hc_method="average") 
+             ,diss=dist(dat_c, method="manhattan"), hc_method="average", linecolor = "green3") 
 
 # Silhouette
 fviz_nbclust(dat_c, FUNcluster=hcut, method="silhouette", k.max=10
-             ,diss=dist(dat_c, method="manhattan"), hc_method="average") 
+             ,diss=dist(dat_c, method="manhattan"), hc_method="average", linecolor = "green3") 
 
 # La cantidad optima de clusters es 8
 # Analisis de resultados
@@ -324,3 +324,23 @@ plt_density <- ggplot(gdat, aes(x = value, y = variable, color = cluster, point_
   theme_minimal()
 
 print(plt_density)
+
+# Ahora sin variable duration_ms
+dat_c_hc1 <- dat_c_hc %>%
+  select(-duration_ms)
+
+gdat <- dat_c_hc1 %>% 
+  pivot_longer(
+    -all_of(c(id_cols, "cluster")), names_to="variable", values_to="value")
+
+plt_density1 <- ggplot(gdat, aes(x = value, y = variable, color = cluster, point_color = cluster, fill = cluster)) +
+  geom_density_ridges(
+    alpha = 0.5, scale = 1,
+    jittered_points = TRUE,
+    position = position_jitter(height = 0),
+    point_shape = "|", point_size = 2,
+    bandwidth = 0.1  # Specify the bandwidth value here
+  ) +
+  theme_minimal()
+
+print(plt_density1)
