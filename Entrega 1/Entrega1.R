@@ -1,24 +1,27 @@
-install.packages("scales")
-install.packages("GGally")
-install.packages("gridExtra")
-install.packages("vcd")
-install.packages("plotly")
-library(gridExtra)
 library(tidyverse)
 library(ggplot2)
 library(corrplot)
 library(scales)
-library(vcd)
-library("plotly")
+library(glue)
+library(GGally)
+library(ggridges)
+library(plotly)
+library(factoextra)
+library(amap)
+library(sf)
+library(igraph)
 
 #Limpieza de datos
-datos <- dataset
 datos <- read.csv("~/Universidad/Datasets/Predictiva/dataset.csv")
 datosFiltrados <- datos %>% filter(track_genre == 'classical'|track_genre == 'metal' | track_genre == 'jazz' | track_genre == 'punk-rock'
                                    | track_genre == 'techno' | track_genre == 'reggae' | track_genre == 'sleep'
                                    | track_genre == 'trance' | track_genre == 'study' | track_genre == 'hip-hop') 
 # Vista preliminar
 summary(datosFiltrados)
+datosNumericos <- datosFiltrados %>% select(popularity, duration_ms, danceability,
+                                            energy, loudness, speechiness,
+                                            acousticness, instrumentalness, liveness,
+                                            valence, tempo)
 
 # Chequeo de NAs
 colnames(datosFiltrados)[apply(datosFiltrados, 2, anyNA)] # No hay columnas con missings
@@ -172,22 +175,22 @@ ggplot(datosFiltrados, aes(x = tempo, y = loudness, color = explicit)) +
 
 #Calcular valores de V de Cramer
 #explicit-genero
-tabla_contingencia <- table(df_filtrado$track_genre, df_filtrado$explicit) # Crear una tabla de contingencia entre las variables track_genre y explicit
+tabla_contingencia <- table(datosFiltrados$track_genre, datosFiltrados$explicit) # Crear una tabla de contingencia entre las variables track_genre y explicit
 resultado_cramer <- assocstats(tabla_contingencia) # Calcular el coeficiente V de Cramer
 sqrt(resultado_cramer$chisq / (sum(tabla_contingencia) * (min(nrow(tabla_contingencia), ncol(tabla_contingencia)) - 1)))
 
 #explicit-key
-tabla_contingenciaII <- table(df_filtrado$key, df_filtrado$explicit) # Crear una tabla de contingencia entre las variables key y explicit
+tabla_contingenciaII <- table(datosFiltrados$key, datosFiltrados$explicit) # Crear una tabla de contingencia entre las variables key y explicit
 resultado_cramerII <- assocstats(tabla_contingenciaII)
 sqrt(resultado_cramerII$chisq / (sum(tabla_contingenciaII) * (min(nrow(tabla_contingenciaII), ncol(tabla_contingenciaII)) - 1)))
 
 #explicit-mode
-tabla_contingenciaIII <- table(df_filtrado$mode, df_filtrado$explicit)# Crear una tabla de contingencia entre las variables key y explicit
+tabla_contingenciaIII <- table(datosFiltrados$mode, datosFiltrados$explicit)# Crear una tabla de contingencia entre las variables key y explicit
 resultado_cramerIII <- assocstats(tabla_contingenciaIII)
 sqrt(resultado_cramerIII$chisq / (sum(tabla_contingenciaIII) * (min(nrow(tabla_contingenciaIII), ncol(tabla_contingenciaIII)) - 1)))
 
 #explicit-time signature
-tabla_contingenciaIV <- table(df_filtrado$time_signature, df_filtrado$explicit) # Crear una tabla de contingencia entre las variables key y explicit
+tabla_contingenciaIV <- table(datosFiltrados$time_signature, datosFiltrados$explicit) # Crear una tabla de contingencia entre las variables key y explicit
 resultado_cramerIV <- assocstats(tabla_contingenciaIV)
 sqrt(resultado_cramerIV$chisq / (sum(tabla_contingenciaIV) * (min(nrow(tabla_contingenciaIV), ncol(tabla_contingenciaIV)) - 1)))
 
@@ -220,13 +223,13 @@ ggplot(datos_combinados, aes(x = track_genre, na.rm=TRUE, y = explicit_numeric, 
 minmax = function(x) (x - min(x)) / (max(x) - min(x))
 rob_scale = function(x) (x - median(x)) / IQR(x)
 id_cols = c("X","track_id","artists","album_name","track_name", 'mode', "key","time_signature",
-            'explicit', 'track_genre', 'duration_ms')
+            'explicit', 'track_genre')
 
 # data numerica normalizada
 dat_c = datosFiltrados %>% 
   select_if(is.numeric) %>% 
   select("popularity","duration_ms","danceability","energy","loudness","speechiness","acousticness",   
-         "instrumentalness","liveness","valence","tempo") %>%
+         "instrumentalness","liveness","valence","tempo", 'duration_ms') %>%
   # scale(center=T, scale=T) %>% # estandarizacion media-desvio
   mutate_all(rob_scale) %>% # normalizacion
   as.data.frame() # las funciones de cluster se llevan mejor con data.frame (admite row.names)
@@ -288,10 +291,36 @@ fviz_nbclust(dat_c, FUNcluster=hcut, method="silhouette", k.max=10
              ,diss=dist(dat_c, method="manhattan"), hc_method="average") 
 
 # La cantidad optima de clusters es 8
-fviz_dend(hc, horiz=T, k=8, repel=T) 
+# Analisis de resultados
+hc = hcut(dat_c, k=8, hc_method="average", hc_metric="manhattan", stand=F)
+plt = fviz_silhouette(hc, label=T, print.summary=F) +
+  theme(axis.text.x=element_text(angle=-90, size=4))
+print( plt )
 
-fviz_dend(hc, type="phylogenic", k=8, repel=T) 
+# Distribuciones de Clusters
+# data con variables originales
+dat_hc = datosFiltrados %>%
+  mutate(cluster = factor(hc$cluster))
 
+# variables normalizadas
+dat_c_hc = dat_c %>%
+  bind_cols(datosFiltrados %>% select(all_of(id_cols))) %>% 
+  mutate(cluster = factor(hc$cluster))
 
+# long data.frame con variables normalizadas
+gdat = dat_c_hc %>% 
+  pivot_longer(
+    -all_of(c(id_cols, "cluster")), names_to="variable", values_to="value")
 
+# densidades por variable
+plt_density <- ggplot(gdat, aes(x = value, y = variable, color = cluster, point_color = cluster, fill = cluster)) +
+  geom_density_ridges(
+    alpha = 0.5, scale = 1,
+    jittered_points = TRUE,
+    position = position_jitter(height = 0),
+    point_shape = "|", point_size = 2,
+    bandwidth = 0.1  # Specify the bandwidth value here
+  ) +
+  theme_minimal()
 
+print(plt_density)
