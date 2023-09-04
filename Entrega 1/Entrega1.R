@@ -14,7 +14,7 @@ library(sf)
 library(igraph)
 
 #Limpieza de datos
-
+datos <- read.csv("~/Universidad/Datasets/Predictiva/dataset.csv")
 datosFiltrados <- datos %>% filter(track_genre == 'classical'|track_genre == 'metal' | track_genre == 'jazz' | track_genre == 'punk-rock'
                                    | track_genre == 'techno' | track_genre == 'reggae' | track_genre == 'sleep'
                                    | track_genre == 'trance' | track_genre == 'study' | track_genre == 'hip-hop') 
@@ -209,9 +209,9 @@ sqrt(resultado_cramerIV$chisq / (sum(tabla_contingenciaIV) * (min(nrow(tabla_con
 #Grafico de barras de cantidad de canciones no explicitas y promedio de energy por g?nero
 
 
-df_filtrado$explicit_numeric <- as.numeric(norm_completa$`datosFiltrados$explicit` == "False") # Crear una copia de la columna "explicit" como valores numéricos (0 para True, 1 para False) (hay generos sin explicitas)
-canciones_explicitas_por_genero <- aggregate(explicit_numeric ~ track_genre, data = df_filtrado, FUN = sum) # Contar la cantidad de canciones "explicit" por género
-promedio_energy_por_genero <- aggregate(energy ~ track_genre, data = df_filtrado, FUN = mean) # Calcular el promedio de "energy" por g?nero
+datosFiltrados$explicit_numeric <- as.numeric(norm_completa$`datosFiltrados$explicit` == "False") # Crear una copia de la columna "explicit" como valores numéricos (0 para True, 1 para False) (hay generos sin explicitas)
+canciones_explicitas_por_genero <- aggregate(explicit_numeric ~ track_genre, data = datosFiltrados, FUN = sum) # Contar la cantidad de canciones "explicit" por género
+promedio_energy_por_genero <- aggregate(energy ~ track_genre, data = datosFiltrados, FUN = mean) # Calcular el promedio de "energy" por g?nero
 datos_combinados <- merge(canciones_explicitas_por_genero, promedio_energy_por_genero, by = "track_genre", all.x = TRUE) # Combinar los datos
 datos_combinados$track_genre <- fct_reorder(datos_combinados$track_genre, datos_combinados$explicit_numeric, .fun = sum) # Ordenar los niveles del factor "track_genre" por "explicit_numeric"
 
