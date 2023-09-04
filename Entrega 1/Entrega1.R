@@ -255,7 +255,9 @@ gdat = datosFiltrados %>%
 # Plot de coordenadas paralelas
 plt1 = ggplot(gdat, aes(x = variable, y = value, group = track_genre)) +
   geom_line(alpha = 0.3) +
-  geom_line(data = filter(gdat, track_genre == "hip-hop"), color = "green3", alpha = 0.7) +
+  geom_line(data = filter(gdat, track_genre == "hip-hop"), color = "green4", alpha = 1) +
+  geom_line(data = filter(gdat, track_genre == "classical"), color = "red3", alpha = 0.7) +
+  geom_line(data = filter(gdat, track_genre == "sleep"), color = "red3", alpha = 0.7) +
   xlab("Variables") +  ylab("Valores") + 
   ggtitle("Coordenadas paralelas por variable, en relación a hip-hop") +
   theme(text = element_text(family = "mono"),
@@ -353,6 +355,11 @@ silhouette_plot +
 # Data con variables originales
 dat_hc = datosFiltrados %>%
   mutate(cluster = factor(hc1$cluster))
+
+porcentajeExplicitXCluster <- dat_hc %>%
+  group_by(cluster) %>%
+  summarise(propExplicit = sum(explicit == 'True') / n(), n=n())
+
 
 # Variables normalizadas
 dat_c_hc = dat_c %>%
