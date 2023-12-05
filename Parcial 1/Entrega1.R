@@ -29,11 +29,11 @@ datosNumericos <- datosFiltrados %>% select(popularity, duration_ms, danceabilit
 colnames(datosFiltrados)[apply(datosFiltrados, 2, anyNA)] # No hay columnas con missings
 
 
-minmax = function(x) (x - min(x)) / (max(x) - min(x))
-dat_c = datosNumericos %>% 
-  select_if(is.numeric) %>% 
-  mutate_all(minmax) %>% 
-  as.data.frame()
+dat_c <- datosNumericos %>%
+  select_if(is.numeric) %>%
+  scale()
+
+dat_c <- as.data.frame(dat_c)
 
 #Graficos de densidad de las variables numericas
 plots <- lapply(names(dat_c), function(colname) { # Crea gr?ficos de densidad 
