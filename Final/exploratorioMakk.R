@@ -38,7 +38,7 @@ dat_c <- as.data.frame(dat_c)
 plots <- lapply(names(dat_c), function(colname) { # Crea gr?ficos de densidad 
   ggplot(data = dat_c, aes_string(x = colname)) +
     geom_density(fill = "green3", alpha = 0.5) +
-    labs(title = paste("Gr?fico de Densidad de", colname)) +
+    labs(title = paste("Grafico de Densidad de", colname)) +
     theme(text = element_text(family = "mono"),
           plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
           panel.background = element_rect(fill = '#F0F0F0', color = 'grey'),
@@ -120,7 +120,7 @@ ggplot(resumen_explicit, aes(x = "", y = Frecuencia, fill = Categoria)) +
   geom_text(aes(label = paste(round(Porcentaje, 2), "%")), position = position_stack(vjust = 0.5)) +
   coord_polar(theta = "y") +
   scale_fill_manual(values = c("darkgreen", "lightgreen")) + 
-  labs(title = "Proporci?n de canciones expl?citas y no expl?citas")+
+  labs(title = "Proporcion de canciones explicitas y no explicitas")+
   theme(text = element_text(family = "mono"),
         plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
         panel.background = element_rect(fill = '#F0F0F0', color = 'grey'),
@@ -159,7 +159,7 @@ t.test(canciones_explicitas$instrumentalness, canciones_no_explicitas$instrument
 # Analizando a Explicit en relacion a Energy y Loudness
 ggplot(norm_completa, aes(x = loudness, y = energy, color = datosFiltrados$explicit)) +
   geom_point(alpha = 0.3) +
-  labs(x = "Loudness", y = "Energy", title = "Relaci?n entre Energy, Loudness y Explicit") +
+  labs(x = "Loudness", y = "Energy", title = "Relacion entre Energy, Loudness y Explicit") +
   scale_color_manual(values = c("green3", "black"), labels = c("No Explicit", "Explicit")) +
   geom_smooth(method = "lm", formula = y ~ x, se = FALSE) +
   theme(text = element_text(family = "mono"),
@@ -217,8 +217,8 @@ datos_combinados$track_genre <- fct_reorder(datos_combinados$track_genre, datos_
 ggplot(datos_combinados, aes(x = track_genre, na.rm=TRUE, y = explicit_numeric, fill = energy)) +
   geom_bar(stat = "identity") +
   scale_fill_gradient(low = "light green", high = "dark green") +
-  labs(x = "Género de M?sica", y = "Cantidad de Canciones No Explicitas", fill = "Promedio de Energy") +
-  ggtitle("Cantidad de Canciones No Explicitas por G?nero de M?sica") +
+  labs(x = "Género de Musica", y = "Cantidad de Canciones No Explicitas", fill = "Promedio de Energy") +
+  ggtitle("Cantidad de Canciones No Explicitas por Genero de Musica") +
   theme(text = element_text(family = "mono"),
         plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
         panel.background = element_rect(fill = '#F0F0F0', color = 'grey'),
@@ -240,12 +240,12 @@ dat_c = datosFiltrados %>%
   select_if(is.numeric) %>% 
   select("popularity","duration_ms","danceability","energy","loudness","speechiness","acousticness",   
          "instrumentalness","liveness","valence","tempo", 'duration_ms') %>%
-  mutate_all(minmax) %>% 
+  scale() %>% 
   as.data.frame() 
 
 # Analisis exploratorio
-gdat = datosFiltrados %>%
-  mutate_if(is.numeric, minmax) %>% 
+gdat <- datosFiltrados %>%
+  mutate(across(where(is.numeric), scale)) %>%
   pivot_longer(
     cols = -all_of(id_cols),
     names_to = "variable",
